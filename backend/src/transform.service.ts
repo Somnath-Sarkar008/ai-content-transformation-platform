@@ -40,7 +40,7 @@ export class TransformService {
   async createPdf(title: string, sections: { heading: string; text: string }[]) {
     const doc = new PDFDocument({ margin: 50 });
     const chunks: Buffer[] = [];
-    doc.on("data", c => chunks.push(c));
+    doc.on("data", (chunk: Buffer) => chunks.push(chunk));
     const done = new Promise<Buffer>(resolve => doc.on("end", () => resolve(Buffer.concat(chunks))));
     doc.fontSize(22).text(title).moveDown();
     for (const section of sections) doc.fontSize(15).text(section.heading, { underline: true }).moveDown(0.3).fontSize(11).text(section.text).moveDown();
