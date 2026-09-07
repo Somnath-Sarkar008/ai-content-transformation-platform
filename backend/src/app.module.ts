@@ -8,9 +8,13 @@ import { WorkflowController } from './workflow.controller';
 import { TransformService } from './transform.service';
 import { SourceService } from './source.service';
 import { ResearchService } from './research.service';
+import { TextAgent } from './agents/text.agent';
+import { PresentationAgent } from './agents/presentation.agent';
+import { MediaAgent } from './agents/media.agent';
+import { AgentOrchestratorService } from './agents/agent-orchestrator.service';
 
 @Module({
   controllers: [TransformController, ExportController, SourceController, UploadController, ResearchController, WorkflowController],
-  providers: [TransformService, SourceService, ResearchService],
+  providers: [TransformService, SourceService, ResearchService, TextAgent, PresentationAgent, MediaAgent, AgentOrchestratorService],
 })
 export class AppModule {}
