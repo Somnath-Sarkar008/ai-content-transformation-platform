@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import MultiSourceWorkspace from "../components/MultiSourceWorkspace";
 
 export const metadata: Metadata = {
   title: "TransformAI — Content Transformation Platform",
@@ -7,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en"><body>{children}<MultiSourceWorkspace /></body></html>;
 }
