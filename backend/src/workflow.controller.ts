@@ -18,7 +18,6 @@ export class WorkflowController {
 
     events.push({ node: 'Analyze Content', status: enabled('analyze') ? 'completed' : 'disabled', detail: enabled('analyze') ? 'Content intelligence prepared' : 'Node disabled by workflow configuration' });
     let enrichedSource = source;
-
     const researchEnabled = enabled('research') && body.research !== false && nodes.research?.research !== false;
     if (researchEnabled) {
       events.push({ node: 'Research', status: 'running' });
@@ -30,16 +29,13 @@ export class WorkflowController {
       } else events[events.length - 1] = { node: 'Research', status: 'skipped', detail: research.message };
     } else events.push({ node: 'Research', status: 'disabled' });
 
-    if (!enabled('orchestrate')) {
-      return { ok: false, status: 'failed', message: 'Orchestrator node is disabled. Enable it to generate content.', events };
-    }
+    if (!enabled('orchestrate')) return { ok: false, status: 'failed', message: 'Orchestrator node is disabled. Enable it to generate content.', events };
     events.push({ node: 'Gemini Orchestrator', status: 'running', detail: body.model || 'gemini-2.5-flash-lite' });
     const result = await this.transformService.transform({ ...body, outputs, source: enrichedSource, verify: enabled('verify') && body.verify !== false });
     events[events.length - 1].status = result.ok ? 'completed' : 'failed';
-
     const qualityPassed = result.ok && result.content?.quality?.passed !== false;
     events.push({ node: 'Quality Guardian', status: enabled('verify') ? (qualityPassed ? 'passed' : 'review') : 'disabled', detail: enabled('verify') ? (qualityPassed ? `${result.content?.quality?.score ?? 0}/100` : 'Review generated content') : 'Verification disabled by workflow configuration' });
     events.push({ node: 'Export', status: enabled('export') && result.ok ? 'ready' : 'blocked', detail: enabled('export') && result.ok ? 'Artifacts can be downloaded from the workspace' : 'Export node disabled or generation failed' });
-    return { ...result, status: result.ok ? 'completed' : 'failed', events, workflow: { outputs, research: researchEnabled, model: body.model || 'gemini-2.5-flash-lite', verify: enabled('verify') } };
+    return { ...result, status: result.ok ? 'completed' : 'failed', events, workflow: { outputs, research: researchEnabled, model: body.model || 'gemini-2.5-flash-lite', verify: enabled('verify'), export: enabled('export') } };
   }
 }
