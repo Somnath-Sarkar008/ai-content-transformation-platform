@@ -10,7 +10,7 @@ import { AgentOrchestratorService } from "./agents/agent-orchestrator.service";
 export class TransformService {
   constructor(private readonly agentOrchestrator: AgentOrchestratorService) {}
 
-  async transform(body: { source?: string; outputs?: string[]; audience?: string; tone?: string; language?: string; detail?: string; research?: boolean; model?: string; verify?: boolean }) {
+  async transform(body: { source?: string; outputs?: string[]; audience?: string; tone?: string; language?: string; detail?: string; research?: boolean; researchEvidence?: string; researchSources?: Array<{title:string;url:string;snippet:string;score?:number}>; model?: string; verify?: boolean }) {
     const source = body.source?.trim() || "";
     const outputs = body.outputs?.length ? body.outputs : ["Executive Summary"];
     if (!source) return { ok: false, message: "Source content is required" };
@@ -19,15 +19,15 @@ export class TransformService {
     const google = createGoogleGenerativeAI({ apiKey });
     const model = body.model || "gemini-2.5-flash-lite";
 
-    let researchSources: Array<{ title:string; url:string; snippet:string; score?:number }> = [];
-    let researchAnswer = "";
-    if (body.research && process.env.TAVILY_API_KEY?.trim()) {
+    let researchSources = body.researchSources || [];
+    let researchAnswer = body.researchEvidence || "";
+    if (body.research && !body.researchEvidence && process.env.TAVILY_API_KEY?.trim()) {
       try {
         const rr = await fetch("https://api.tavily.com/search", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ api_key:process.env.TAVILY_API_KEY, query:source.slice(0,500), search_depth:"advanced", max_results:5, include_answer:true }) });
         if (rr.ok) { const rd:any=await rr.json(); researchAnswer=rd.answer||""; researchSources=(rd.results||[]).map((r:any)=>({title:r.title||"Untitled source",url:r.url||"",snippet:r.content||"",score:r.score})).filter((r:any)=>r.url); }
       } catch (e) { console.warn("Research pass unavailable:",e); }
     }
-    const evidence = researchSources.length ? `\n\nRESEARCH EVIDENCE (supporting context only):\n${researchAnswer}\n${researchSources.map(r=>`- ${r.title}: ${r.snippet}\n  URL: ${r.url}`).join("\n")}` : "";
+    const evidence = researchSources.length || researchAnswer ? `\n\nRESEARCH EVIDENCE (supporting context only):\n${researchAnswer}\n${researchSources.map(r=>`- ${r.title}: ${r.snippet}\n  URL: ${r.url}`).join("\n")}` : "";
     const workingSource = `${source.slice(0,60000)}${evidence}`;
 
     try {
