@@ -17,6 +17,11 @@ export class AgentOrchestratorService {
     ]);
     results.push(text, presentation, media);
     const outputs = Object.assign({}, ...results.map(r => r.outputs));
-    return { outputs, agents: results.filter(r => Object.keys(r.outputs).length).map(r => r.agent) };
+    const agents:string[]=[];
+    if(Object.keys(text.outputs).length) agents.push('text');
+    if(Object.keys(presentation.outputs).length) agents.push('presentation');
+    if(Object.prototype.hasOwnProperty.call(media.outputs,'Infographic')) agents.push('image');
+    if(Object.prototype.hasOwnProperty.call(media.outputs,'Video Package')) agents.push('video');
+    return { outputs, agents };
   }
 }
