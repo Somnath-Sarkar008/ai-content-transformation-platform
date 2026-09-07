@@ -7,11 +7,14 @@ import { Document, Packer, Paragraph, HeadingLevel } from "docx";
 import { AgentOrchestratorService } from "./agents/agent-orchestrator.service";
 import type { SourceConflict } from "./agents/agent.types";
 
+export type ExportSource = { id?: string; name: string; type?: string; url?: string; excerpt?: string };
+export type ExportVerification = { score?: number; passed?: boolean; status?: string; issues?: string[]; conflictCount?: number; unresolvedConflicts?: number };
+
 @Injectable()
 export class TransformService {
   constructor(private readonly agentOrchestrator: AgentOrchestratorService) {}
 
-  async transform(body: { source?: string; outputs?: string[]; audience?: string; tone?: string; language?: string; detail?: string; research?: boolean; model?: string; verify?: boolean; researchEvidence?: string; researchSources?: Array<{title:string;url:string;snippet:string;score?:number}> }) {
+  async transform(body: { source?: string; sources?: unknown[]; outputs?: string[]; audience?: string; tone?: string; language?: string; detail?: string; research?: boolean; model?: string; verify?: boolean; researchEvidence?: string; researchSources?: Array<{title:string;url:string;snippet:string;score?:number}> }) {
     const source = body.source?.trim() || "";
     const outputs = body.outputs?.length ? body.outputs : ["Executive Summary"];
     if (!source) return { ok: false, message: "Source content is required" };
@@ -19,7 +22,6 @@ export class TransformService {
     if (!apiKey) return { ok: false, status: "needs_api_key", message: "GEMINI_API_KEY is not available to the NestJS process." };
     const google = createGoogleGenerativeAI({ apiKey });
     const model = body.model || "gemini-2.5-flash-lite";
-
     let researchSources = body.researchSources || [];
     let researchAnswer = body.researchEvidence || "";
     if (body.research && !researchSources.length && process.env.TAVILY_API_KEY?.trim()) {
@@ -30,7 +32,6 @@ export class TransformService {
     }
     const evidence = researchSources.length ? `\n\nRESEARCH EVIDENCE (supporting context only):\n${researchAnswer}\n${researchSources.map(r=>`- ${r.title}: ${r.snippet}\n  URL: ${r.url}`).join("\n")}` : "";
     const workingSource = `${source.slice(0,60000)}${evidence}`;
-
     try {
       const base = await this.buildIntelligence(google, model, workingSource, outputs, body);
       const conflicts: SourceConflict[] = Array.isArray(base.conflicts) ? base.conflicts : [];
@@ -74,7 +75,35 @@ export class TransformService {
     try{return JSON.parse(text.replace(/^```json\s*/i,"").replace(/```$/i,"").trim());}catch{return {title:"Transformation",summary:text,facts:[],entities:[],claims:[],provenance:{},conflicts:[],outputs:{}};}
   }
 
-  async createPptx(title:string,slides:{title:string;bullets?:string[];speakerNotes?:string}[]){const pptx=new PptxGenJS();pptx.layout="LAYOUT_WIDE";pptx.author="TransformAI";for(const item of slides){const slide=pptx.addSlide();slide.addText(item.title,{x:.7,y:.55,w:12,h:.6,fontSize:28,bold:true});slide.addText((item.bullets||[]).map(b=>({text:b,options:{bullet:{indent:18}}})),{x:.9,y:1.45,w:11.3,h:4.7,fontSize:18,breakLine:true,valign:"top"});if(item.speakerNotes)slide.addNotes(item.speakerNotes);}return pptx.write({outputType:"nodebuffer"});}
-  async createPdf(title:string,sections:{heading:string;text:string}[]){const doc=new PDFDocument({margin:50});const chunks:Buffer[]=[];doc.on("data",(c:Buffer)=>chunks.push(c));const done=new Promise<Buffer>(r=>doc.on("end",()=>r(Buffer.concat(chunks))));doc.fontSize(22).text(title).moveDown();for(const s of sections)doc.fontSize(15).text(s.heading,{underline:true}).moveDown(.3).fontSize(11).text(s.text).moveDown();doc.end();return done;}
-  async createDocx(title:string,sections:{heading:string;text:string}[]){const doc=new Document({sections:[{children:[new Paragraph({text:title,heading:HeadingLevel.TITLE}),...sections.flatMap(s=>[new Paragraph({text:s.heading,heading:HeadingLevel.HEADING_1}),new Paragraph(s.text)])]}]});return Packer.toBuffer(doc);}
+  async createPptx(title:string,slides:{title:string;bullets?:string[];speakerNotes?:string}[], sources:ExportSource[] = [], verification:ExportVerification = {}){
+    const pptx=new PptxGenJS(); pptx.layout="LAYOUT_WIDE"; pptx.author="TransformAI";
+    for(const item of slides){const slide=pptx.addSlide();slide.addText(item.title,{x:.7,y:.55,w:12,h:.6,fontSize:28,bold:true});slide.addText((item.bullets||[]).map(b=>({text:b,options:{bullet:{indent:18}}})),{x:.9,y:1.45,w:11.3,h:4.7,fontSize:18,breakLine:true,valign:"top"});if(item.speakerNotes)slide.addNotes(item.speakerNotes);}
+    this.addPptxVerificationSlide(pptx,sources,verification);
+    return pptx.write({outputType:"nodebuffer"});
+  }
+
+  private addPptxVerificationSlide(pptx:PptxGenJS,sources:ExportSource[],verification:ExportVerification){
+    const slide=pptx.addSlide(); slide.addText("Sources & Verification",{x:.7,y:.45,w:12,h:.55,fontSize:26,bold:true});
+    const lines=[`Quality Guardian: ${verification.passed===true?"VERIFIED":verification.passed===false?"REVIEW REQUIRED":"NOT RUN"}`,`Verification score: ${verification.score ?? "—"}/100`,`Source conflicts: ${verification.conflictCount ?? 0} · Unresolved: ${verification.unresolvedConflicts ?? 0}`,...sources.slice(0,8).map((s,i)=>`${i+1}. ${s.name}${s.url?` — ${s.url}`:""}`)];
+    slide.addText(lines.map(t=>({text:t,options:{bullet:{indent:18}}})),{x:.85,y:1.35,w:11.2,h:5.2,fontSize:15,breakLine:true,valign:"top"});
+  }
+
+  async createPdf(title:string,sections:{heading:string;text:string}[],sources:ExportSource[] = [],verification:ExportVerification = {}){
+    const doc=new PDFDocument({margin:50});const chunks:Buffer[]=[];doc.on("data",(c:Buffer)=>chunks.push(c));const done=new Promise<Buffer>(r=>doc.on("end",()=>r(Buffer.concat(chunks))));
+    doc.fontSize(22).text(title).moveDown();for(const s of sections)doc.fontSize(15).text(s.heading,{underline:true}).moveDown(.3).fontSize(11).text(s.text).moveDown();
+    this.writePdfVerification(doc,sources,verification); doc.end(); return done;
+  }
+
+  private writePdfVerification(doc:PDFDocument,sources:ExportSource[],verification:ExportVerification){
+    doc.addPage().fontSize(18).text("Sources & Verification",{underline:true}).moveDown();
+    doc.fontSize(11).text(`Quality Guardian: ${verification.passed===true?"VERIFIED":verification.passed===false?"REVIEW REQUIRED":"NOT RUN"}`);
+    doc.text(`Verification score: ${verification.score ?? "—"}/100`); doc.text(`Source conflicts: ${verification.conflictCount ?? 0} · Unresolved: ${verification.unresolvedConflicts ?? 0}`).moveDown();
+    sources.slice(0,20).forEach((s,i)=>{doc.fontSize(10).text(`${i+1}. ${s.name}${s.type?` (${s.type})`:""}`);if(s.url)doc.text(`   ${s.url}`);if(s.excerpt)doc.text(`   Evidence: ${s.excerpt.slice(0,240)}`);doc.moveDown(.25);});
+  }
+
+  async createDocx(title:string,sections:{heading:string;text:string}[],sources:ExportSource[] = [],verification:ExportVerification = {}){
+    const children:Paragraph[]=[new Paragraph({text:title,heading:HeadingLevel.TITLE}),...sections.flatMap(s=>[new Paragraph({text:s.heading,heading:HeadingLevel.HEADING_1}),new Paragraph(s.text)]),new Paragraph({text:"Sources & Verification",heading:HeadingLevel.HEADING_1}),new Paragraph(`Quality Guardian: ${verification.passed===true?"VERIFIED":verification.passed===false?"REVIEW REQUIRED":"NOT RUN"} · Score: ${verification.score ?? "—"}/100 · Conflicts: ${verification.conflictCount ?? 0} · Unresolved: ${verification.unresolvedConflicts ?? 0}`)];
+    for(const s of sources.slice(0,20)){children.push(new Paragraph(`${s.name}${s.url?` — ${s.url}`:""}${s.excerpt?`\nEvidence: ${s.excerpt.slice(0,240)}`:""}`));}
+    const doc=new Document({sections:[{children}]}); return Packer.toBuffer(doc);
+  }
 }
