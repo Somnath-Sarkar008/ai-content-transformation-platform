@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { google } from "@ai-sdk/google";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { generateText } from "ai";
 import PDFDocument from "pdfkit";
 import PptxGenJS from "pptxgenjs";
@@ -12,16 +12,61 @@ export class TransformService {
     const outputs = body.outputs?.length ? body.outputs : ["Executive Summary"];
     if (!source) return { ok: false, message: "Source content is required" };
 
-    const prompt = `You are the Content Intelligence + Orchestrator for an SIH prototype. Analyze the source and produce consistent transformation-ready content. Do not invent facts.\nSOURCE:\n${source}\n\nOUTPUTS: ${outputs.join(", ")}\nAUDIENCE: ${body.audience || "General audience"}\nTONE: ${body.tone || "Professional"}\nLANGUAGE: ${body.language || "English"}\nDETAIL: ${body.detail || "Balanced"}\n\nReturn a concise JSON object with keys: title, summary, facts (array), entities (array), outputs (object keyed by requested output names), quality (object with score 0-100, passed boolean, issues array). For Presentation, include slides as an array with title, bullets and speakerNotes. For Video Package include script, storyboard and narration. Keep every output grounded in the same facts.`;
-
-    if (!process.env.GEMINI_API_KEY) {
-      return { ok: true, mode: "prototype", status: "needs_api_key", message: "Set GEMINI_API_KEY to enable live generation.", content: { title: "Prototype transformation", summary: source.slice(0, 600), facts: [], entities: [], outputs: Object.fromEntries(outputs.map(o => [o, `Configured output: ${o}`])), quality: { score: 0, passed: false, issues: ["Gemini API key not configured"] } } };
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    if (!apiKey) {
+      return {
+        ok: false,
+        status: "needs_api_key",
+        message: "GEMINI_API_KEY is not available to the NestJS process.",
+      };
     }
 
-    const { text } = await generateText({ model: google("gemini-3.5-flash-lite"), prompt, temperature: 0.2 });
-    let content: any;
-    try { content = JSON.parse(text.replace(/^```json\s*/i, "").replace(/```$/i, "").trim()); } catch { content = { title: "Transformation", summary: text, outputs: Object.fromEntries(outputs.map(o => [o, text])), quality: { score: 80, passed: true, issues: [] } }; }
-    return { ok: true, status: "verified", content };
+    const prompt = `You are the Content Intelligence + Orchestrator for an SIH prototype. Analyze the source and produce consistent transformation-ready content. Do not invent facts.
+SOURCE:
+${source}
+
+OUTPUTS: ${outputs.join(", ")}
+AUDIENCE: ${body.audience || "General audience"}
+TONE: ${body.tone || "Professional"}
+LANGUAGE: ${body.language || "English"}
+DETAIL: ${body.detail || "Balanced"}
+
+Return a concise JSON object with keys: title, summary, facts (array), entities (array), outputs (object keyed by requested output names), quality (object with score 0-100, passed boolean, issues array). For Presentation, include slides as an array with title, bullets and speakerNotes. For Video Package include script, storyboard and narration. Keep every output grounded in the same facts.`;
+
+    try {
+      // The default @ai-sdk/google provider looks for GOOGLE_GENERATIVE_AI_API_KEY.
+      // Our project intentionally uses GEMINI_API_KEY, so configure the provider explicitly.
+      const google = createGoogleGenerativeAI({ apiKey });
+      const { text } = await generateText({
+        model: google("gemini-2.5-flash-lite"),
+        prompt,
+        temperature: 0.2,
+      });
+
+      let content: any;
+      try {
+        content = JSON.parse(text.replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
+      } catch {
+        content = {
+          title: "Transformation",
+          summary: text,
+          facts: [],
+          entities: [],
+          outputs: Object.fromEntries(outputs.map(o => [o, text])),
+          quality: { score: 70, passed: true, issues: ["Model returned text instead of strict JSON; normalized by the prototype parser."] },
+        };
+      }
+
+      return { ok: true, status: "verified", content };
+    } catch (error) {
+      console.error("Gemini generation failed:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        status: "generation_failed",
+        message: `Gemini generation failed: ${message}`,
+      };
+    }
   }
 
   async createPptx(title: string, slides: { title: string; bullets?: string[]; speakerNotes?: string }[]) {
