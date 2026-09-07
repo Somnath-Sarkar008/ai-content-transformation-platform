@@ -1,1 +1,32 @@
-{"name":"backend","private":true,"version":"0.1.0","scripts":{"build":"tsc -p tsconfig.json","start":"node dist/main.js","start:dev":"tsc -p tsconfig.json --watch"},"dependencies":{"@nestjs/common":"^11.0.0","@nestjs/core":"^11.0.0","@nestjs/platform-express":"^11.0.0","@ai-sdk/google":"^3.0.29","ai":"^6.0.94","zod":"^4.3.6","pdfkit":"^0.17.2","docx":"^9.5.1","pptxgenjs":"^4.0.1","multer":"^2.0.0","reflect-metadata":"^0.2.2","rxjs":"^7.8.0"},"devDependencies":{"@types/node":"^22.0.0","@types/express":"^5.0.0","typescript":"^5.0.0","ts-node":"^10.9.2"}}
+{
+  "name": "backend",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "start:dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@ai-sdk/google": "^3.0.29",
+    "ai": "^6.0.94",
+    "zod": "^4.3.6",
+    "pdfkit": "^0.17.2",
+    "docx": "^9.5.1",
+    "pptxgenjs": "^4.0.1",
+    "multer": "^2.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/express": "^5.0.0",
+    "@types/multer": "^2.0.0",
+    "@types/pdfkit": "^0.13.9",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.2"
+  }
+}
