@@ -16,6 +16,6 @@ export class WorkflowController {
     events[events.length - 1].status = result.ok ? 'completed' : 'failed';
     events.push({ node: 'Quality Guardian', status: result.ok && result.content?.quality?.passed !== false ? 'passed' : 'review' });
     events.push({ node: 'Export', status: result.ok ? 'ready' : 'blocked' });
-    return { ok: result.ok, status: result.ok ? 'completed' : 'failed', events, ...result };
+    return { ...result, status: result.ok ? 'completed' : 'failed', events };
   }
 }
