@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TransformController } from './transform.controller';
+import { RefineController } from './refine.controller';
 import { ExportController } from './export.controller';
 import { SourceController } from './source.controller';
 import { UploadController } from './upload.controller';
@@ -16,7 +17,7 @@ import { MediaAgent } from './agents/media.agent';
 import { AgentOrchestratorService } from './agents/agent-orchestrator.service';
 
 @Module({
-  controllers: [TransformController, ExportController, SourceController, UploadController, ResearchController, WorkflowController, MediaController],
+  controllers: [TransformController, RefineController, ExportController, SourceController, UploadController, ResearchController, WorkflowController, MediaController],
   providers: [TransformService, SourceService, ResearchService, MediaService, TextAgent, PresentationAgent, MediaAgent, AgentOrchestratorService],
 })
 export class AppModule {}
