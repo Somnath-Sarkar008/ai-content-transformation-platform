@@ -448,7 +448,7 @@ export default function MultiSourceWorkspace() {
               </details>
             </div>
           )}
-        </div>
+        </>
       )}
     </section>
   );
