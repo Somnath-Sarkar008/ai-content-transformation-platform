@@ -40,7 +40,8 @@ export class MediaService {
   }
 
   async renderVideoPackage(videoPackage:any) {
-    if (!ffmpegPath) return {ok:false,status:'ffmpeg_unavailable',message:'FFmpeg binary is unavailable in this installation.'};
+    const executable = ffmpegPath;
+    if (!executable) return {ok:false,status:'ffmpeg_unavailable',message:'FFmpeg binary is unavailable in this installation.'};
     const duration=Math.min(300,Math.max(5,Number(videoPackage?.duration_seconds)||60));
     const subtitles=Array.isArray(videoPackage?.subtitles)?videoPackage.subtitles:[];
     const work=join(tmpdir(),`transformai-${randomUUID()}`);
@@ -53,12 +54,14 @@ export class MediaService {
       const escapedSrt=srtPath.replace(/\\/g,'/').replace(/:/g,'\\:').replace(/'/g,"\\'");
       const filters=[`format=yuv420p`,`subtitles='${escapedSrt}'`].join(',');
       await new Promise<void>((resolve,reject)=>{
-        const child=spawn(ffmpegPath,[
+        const child:ReturnType<typeof spawn> = spawn(executable,[
           '-y','-f','lavfi','-i',`color=c=0x101827:s=1280x720:r=30:d=${duration}`,
           '-vf',filters,'-t',String(duration),'-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-movflags','+faststart',outPath
         ],{windowsHide:true});
-        let stderr=''; child.stderr.on('data',d=>{stderr+=d.toString();});
-        child.on('error',reject); child.on('close',code=>code===0?resolve():reject(new Error(stderr.slice(-3000)||`FFmpeg exited with code ${code}`)));
+        let stderr='';
+        child.stderr?.on('data',(d:Buffer)=>{stderr+=d.toString();});
+        child.on('error',reject);
+        child.on('close',(code:number|null)=>code===0?resolve():reject(new Error(stderr.slice(-3000)||`FFmpeg exited with code ${code}`)));
       });
       const data=await fs.readFile(outPath);
       return {ok:true,type:'video',mimeType:'video/mp4',filename:'transformai-video.mp4',data:data.toString('base64'),duration_seconds:duration};
