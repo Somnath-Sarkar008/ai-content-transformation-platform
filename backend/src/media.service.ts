@@ -17,39 +17,26 @@ export class MediaService {
     const model = process.env.CLOUDFLARE_IMAGE_MODEL || '@cf/black-forest-labs/flux-1-schnell';
 
     if (!accountId || !apiToken) {
-      return {
-        ok: false,
-        status: 'needs_api_key',
-        provider: 'cloudflare',
-        message: 'CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required for image generation. Add them to backend/.env.',
-      };
+      return { ok: false, status: 'needs_api_key', provider: 'cloudflare', message: 'CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required for image generation. Add them to backend/.env.' };
     }
 
     try {
-      // Important: FLUX creates the visual layer only. Exact human-readable text
-      // is rendered separately as SVG so spelling, small text and multilingual
-      // scripts remain crisp instead of being hallucinated by the image model.
       const plan = await this.createInfographicPlan(cleanPrompt);
       const visualPrompt = plan.visual_prompt || cleanPrompt;
       const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ prompt: visualPrompt.slice(0, 2048), seed: Math.floor(Math.random() * 2147483647) }),
+        headers: { Authorization: `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+        // Keep this request model-compatible. Some Workers AI model schemas reject optional fields.
+        body: JSON.stringify({ prompt: visualPrompt.slice(0, 2048) }),
         signal: AbortSignal.timeout(120000),
       });
 
-      if (!response.ok) {
-        throw new Error(`Cloudflare returned HTTP ${response.status}: ${(await response.text()).slice(0, 700)}`);
-      }
+      if (!response.ok) throw new Error(`Cloudflare returned HTTP ${response.status}: ${(await response.text()).slice(0, 700)}`);
 
       const contentType = response.headers.get('content-type') || '';
       let backgroundData = '';
       let backgroundMime = 'image/jpeg';
-
       if (contentType.startsWith('image/')) {
         backgroundMime = contentType.split(';')[0] || 'image/jpeg';
         backgroundData = Buffer.from(await response.arrayBuffer()).toString('base64');
@@ -63,7 +50,6 @@ export class MediaService {
       }
 
       const svg = this.buildInfographicSvg(backgroundData, backgroundMime, plan);
-      const data = Buffer.from(svg, 'utf8').toString('base64');
       return {
         ok: true,
         type: 'image',
@@ -71,34 +57,22 @@ export class MediaService {
         model,
         mimeType: 'image/svg+xml',
         filename: 'transformai-infographic.svg',
-        data,
+        data: Buffer.from(svg, 'utf8').toString('base64'),
         background_data: backgroundData,
         background_mimeType: backgroundMime,
         text_rendered_separately: true,
         language: plan.language,
       };
     } catch (error) {
-      return {
-        ok: false,
-        status: 'image_generation_failed',
-        provider: 'cloudflare',
-        message: error instanceof Error ? error.message : String(error),
-      };
+      return { ok: false, status: 'image_generation_failed', provider: 'cloudflare', message: error instanceof Error ? error.message : String(error) };
     }
   }
 
   private async createInfographicPlan(sourcePrompt: string) {
     const apiKey = process.env.GEMINI_API_KEY?.trim();
     if (!apiKey) {
-      return {
-        language: 'English',
-        title: 'TransformAI Infographic',
-        subtitle: '',
-        facts: [] as string[],
-        visual_prompt: `Create a clean professional infographic background and illustrations. No text, no letters, no numbers, no labels, no typography. ${sourcePrompt}`,
-      };
+      return { language: 'English', title: 'TransformAI Infographic', subtitle: '', facts: [] as string[], visual_prompt: `Create a clean professional infographic background and illustrations. No text, no letters, no numbers, no labels, no typography. ${sourcePrompt}` };
     }
-
     try {
       const google = createGoogleGenerativeAI({ apiKey });
       const { text } = await generateText({
@@ -116,13 +90,7 @@ export class MediaService {
         visual_prompt: `${String(parsed.visual_prompt || 'Clean modern factual infographic background').slice(0, 1900)}. No text, no letters, no numbers, no labels, no typography.`,
       };
     } catch {
-      return {
-        language: 'English',
-        title: 'TransformAI Infographic',
-        subtitle: '',
-        facts: [] as string[],
-        visual_prompt: `Create a clean professional infographic background and illustrations. No text, no letters, no numbers, no labels, no typography. ${sourcePrompt}`,
-      };
+      return { language: 'English', title: 'TransformAI Infographic', subtitle: '', facts: [] as string[], visual_prompt: `Create a clean professional infographic background and illustrations. No text, no letters, no numbers, no labels, no typography. ${sourcePrompt}` };
     }
   }
 
@@ -165,7 +133,11 @@ export class MediaService {
     if (!apiKey) return { ok: false, status: 'needs_api_key', message: 'GEMINI_API_KEY is not configured for video planning.' };
     try {
       const google = createGoogleGenerativeAI({ apiKey });
-      const { text } = await generateText({ model: google(process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'), temperature: 0.2, prompt: `You are a video production planner. Create a factual short-form video package from the supplied source. Return ONLY JSON with this shape: {"title":"","duration_seconds":8,"script":"","narration":"","storyboard":[{"start":0,"end":8,"scene":"","visual":"","narration":""}],"visual_recommendations":[],"subtitles":[{"start":0,"end":4,"text":""}]}. Keep timing sequential, subtitles concise, and every factual claim grounded in the source. ${prompt}` });
+      const { text } = await generateText({
+        model: google(process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'),
+        temperature: 0.2,
+        prompt: `You are a video production planner. Create a factual short-form video package from the supplied source. Return ONLY JSON with this shape: {"title":"","duration_seconds":8,"script":"","narration":"","storyboard":[{"start":0,"end":8,"scene":"","visual":"","narration":""}],"visual_recommendations":[],"subtitles":[{"start":0,"end":4,"text":""}]}. Keep timing sequential, subtitles concise, and every factual claim grounded in the source. ${prompt}`,
+      });
       const clean = text.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
       const parsed: any = JSON.parse(clean);
       const subtitles = Array.isArray(parsed.subtitles) ? parsed.subtitles : [];
@@ -180,22 +152,44 @@ export class MediaService {
 
   async generateVideo(prompt: string) {
     const apiKey = process.env.POLLINATIONS_API_KEY?.trim();
-    if (!apiKey) return { ok: false, status: 'needs_api_key', provider: 'pollinations', message: 'POLLINATIONS_API_KEY is required for video generation. Add it to backend/.env.' };
+    const model = process.env.POLLINATIONS_VIDEO_MODEL || 'veo';
+    const duration = Math.min(10, Math.max(4, Number(process.env.POLLINATIONS_VIDEO_DURATION || 6)));
+    const cleanPrompt = prompt.trim().slice(0, 5000) || 'Create a concise factual documentary-style video.';
+
+    // Preferred path: real AI video from Pollinations.
+    if (apiKey) {
+      try {
+        const url = `https://gen.pollinations.ai/video/${encodeURIComponent(cleanPrompt)}?${new URLSearchParams({ model, duration: String(duration) })}`;
+        const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(180000) });
+        if (!response.ok) throw new Error(`Pollinations video returned HTTP ${response.status}: ${(await response.text()).slice(0, 700)}`);
+        const mimeType = response.headers.get('content-type') || 'video/mp4';
+        const data = Buffer.from(await response.arrayBuffer()).toString('base64');
+        if (!data) throw new Error('Video provider returned an empty response.');
+        return { ok: true, type: 'video', provider: 'pollinations', model, mimeType, filename: 'transformai-video.mp4', data, duration_seconds: duration };
+      } catch (error) {
+        console.warn('AI video generation failed; attempting local MP4 fallback:', error);
+      }
+    }
+
+    // Reliable prototype fallback: generate a visual with the working Cloudflare
+    // image pipeline and turn it into a real animated MP4 with FFmpeg. This means
+    // the UI never falls back to showing only a prompt.
     try {
-      const model = process.env.POLLINATIONS_VIDEO_MODEL || 'veo';
-      const duration = Math.min(10, Math.max(4, Number(process.env.POLLINATIONS_VIDEO_DURATION || 6)));
-      const url = `https://gen.pollinations.ai/video/${encodeURIComponent(prompt.trim().slice(0, 5000))}?${new URLSearchParams({ model, duration: String(duration) })}`;
-      const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(180000) });
-      if (!response.ok) throw new Error(`Pollinations video returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
-      const mimeType = response.headers.get('content-type') || 'video/mp4';
-      const data = Buffer.from(await response.arrayBuffer()).toString('base64');
-      return { ok: true, type: 'video', provider: 'pollinations', model, mimeType, filename: 'transformai-video.mp4', data, duration_seconds: duration };
+      const image: any = await this.generateImage(cleanPrompt);
+      if (!image.ok || !image.background_data) throw new Error(image.message || 'Cloudflare image fallback was unavailable.');
+      const packageData = { duration_seconds: duration, subtitles: [] };
+      const rendered = await this.renderVideoPackage(packageData, {
+        data: image.background_data,
+        mimeType: image.background_mimeType || 'image/jpeg',
+      });
+      if (!rendered.ok) throw new Error(rendered.message);
+      return { ...rendered, provider: 'cloudflare+ffmpeg', model: process.env.CLOUDFLARE_IMAGE_MODEL || '@cf/black-forest-labs/flux-1-schnell', fallback: true };
     } catch (error) {
-      return { ok: false, status: 'video_generation_failed', provider: 'pollinations', message: error instanceof Error ? error.message : String(error) };
+      return { ok: false, status: 'video_generation_failed', provider: apiKey ? 'pollinations' : 'cloudflare+ffmpeg', message: error instanceof Error ? error.message : String(error) };
     }
   }
 
-  async renderVideoPackage(videoPackage: any) {
+  async renderVideoPackage(videoPackage: any, background?: { data?: string; mimeType?: string }) {
     const executable = ffmpegPath;
     if (!executable) return { ok: false, status: 'ffmpeg_unavailable', message: 'FFmpeg binary is unavailable in this installation.' };
     const duration = Math.min(300, Math.max(5, Number(videoPackage?.duration_seconds) || 60));
@@ -203,27 +197,49 @@ export class MediaService {
     const work = join(tmpdir(), `transformai-${randomUUID()}`);
     const srtPath = join(work, 'subtitles.srt');
     const outPath = join(work, 'transformai-video.mp4');
+    const backgroundPath = join(work, `background.${(background?.mimeType || 'image/jpeg').includes('png') ? 'png' : 'jpg'}`);
     try {
       await fs.mkdir(work, { recursive: true });
       const srt = subtitles.map((s: any, i: number) => `${i + 1}\n${this.srtTime(Math.max(0, Number(s.start) || 0))} --> ${this.srtTime(Math.min(duration, Math.max((Number(s.start) || 0) + 1, Number(s.end) || (Number(s.start) || 0) + 4)))}\n${String(s.text || '').replace(/\r?\n/g, ' ').trim()}\n`).join('\n');
       await fs.writeFile(srtPath, srt, 'utf8');
+
+      const args: string[] = ['-y'];
+      if (background?.data) {
+        await fs.writeFile(backgroundPath, Buffer.from(background.data, 'base64'));
+        args.push('-loop', '1', '-i', backgroundPath);
+      } else {
+        args.push('-f', 'lavfi', '-i', `color=c=0x101827:s=1280x720:r=30:d=${duration}`);
+      }
+
       const escapedSrt = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
-      const filters = [`format=yuv420p`, `subtitles='${escapedSrt}'`].join(',');
+      const filters = background?.data
+        ? `scale=1400:788:force_original_aspect_ratio=increase,crop=1280:720,zoompan=z='min(zoom+0.0005,1.08)':d=${Math.round(duration * 30)}:s=1280x720:fps=30,format=yuv420p${subtitles.length ? `,subtitles='${escapedSrt}'` : ''}`
+        : `format=yuv420p${subtitles.length ? `,subtitles='${escapedSrt}'` : ''}`;
+      args.push('-vf', filters, '-t', String(duration), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '24', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outPath);
+
       await new Promise<void>((resolve, reject) => {
-        const child: ReturnType<typeof spawn> = spawn(executable, ['-y','-f','lavfi','-i',`color=c=0x101827:s=1280x720:r=30:d=${duration}`,'-vf',filters,'-t',String(duration),'-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-movflags','+faststart',outPath], { windowsHide: true });
+        const child: ReturnType<typeof spawn> = spawn(executable, args, { windowsHide: true });
         let stderr = '';
         child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-        child.on('error', reject); child.on('close', (code: number | null) => code === 0 ? resolve() : reject(new Error(stderr.slice(-3000) || `FFmpeg exited with code ${code}`)));
+        child.on('error', reject);
+        child.on('close', (code: number | null) => code === 0 ? resolve() : reject(new Error(stderr.slice(-4000) || `FFmpeg exited with code ${code}`)));
       });
+
       const data = await fs.readFile(outPath);
       return { ok: true, type: 'video', mimeType: 'video/mp4', filename: 'transformai-video.mp4', data: data.toString('base64'), duration_seconds: duration };
     } catch (error) {
       return { ok: false, status: 'video_render_failed', message: error instanceof Error ? error.message : String(error) };
-    } finally { await fs.rm(work, { recursive: true, force: true }).catch(() => undefined); }
+    } finally {
+      await fs.rm(work, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   private srtTime(seconds: number) {
-    const ms = Math.max(0, Math.round(seconds * 1000)); const h = Math.floor(ms / 3600000); const m = Math.floor((ms % 3600000) / 60000); const s = Math.floor((ms % 60000) / 1000); const x = ms % 1000;
+    const ms = Math.max(0, Math.round(seconds * 1000));
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    const s = Math.floor((ms % 60000) / 1000);
+    const x = ms % 1000;
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(x).padStart(3, '0')}`;
   }
 }
