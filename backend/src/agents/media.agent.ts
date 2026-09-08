@@ -5,7 +5,7 @@ import type { AgentContext, AgentResult } from './agent.types';
 
 @Injectable()
 export class MediaAgent {
-  async run(ctx: AgentContext, requested: string[], model = 'gemini-2.5-flash-lite'): Promise<AgentResult> {
+  async run(ctx: AgentContext, requested: string[], model = 'gemini-3.5-flash-lite'): Promise<AgentResult> {
     const wantsInfo=requested.includes('Infographic'); const wantsVideo=requested.includes('Video Package');
     if(!wantsInfo&&!wantsVideo) return {agent:'image',outputs:{}};
     const google=createGoogleGenerativeAI({apiKey:process.env.GEMINI_API_KEY!.trim()}); const outputs:Record<string,unknown>={};
