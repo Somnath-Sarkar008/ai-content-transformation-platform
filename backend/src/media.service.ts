@@ -12,19 +12,84 @@ import { randomUUID } from 'node:crypto';
 export class MediaService {
   async generateImage(prompt: string) {
     const cleanPrompt = prompt.trim() || 'Create a polished factual infographic.';
-    const model = process.env.POLLINATIONS_IMAGE_MODEL || 'flux';
-    const apiKey = process.env.POLLINATIONS_API_KEY?.trim();
-    if (!apiKey) return { ok: false, status: 'needs_api_key', provider: 'pollinations', message: 'POLLINATIONS_API_KEY is required for image generation. Add it to backend/.env.' };
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
+    const model = process.env.CLOUDFLARE_IMAGE_MODEL || '@cf/black-forest-labs/flux-1-schnell';
+
+    if (!accountId || !apiToken) {
+      return {
+        ok: false,
+        status: 'needs_api_key',
+        provider: 'cloudflare',
+        message: 'CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required for image generation. Add them to backend/.env.',
+      };
+    }
+
     try {
-      const encoded = encodeURIComponent(cleanPrompt);
-      const url = `https://gen.pollinations.ai/image/${encoded}?${new URLSearchParams({ model, width: '1280', height: '720', nologo: 'true', enhance: 'true' })}`;
-      const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(90000) });
-      if (!response.ok) throw new Error(`Pollinations returned HTTP ${response.status}: ${(await response.text()).slice(0, 400)}`);
-      const mimeType = response.headers.get('content-type') || 'image/jpeg';
-      const data = Buffer.from(await response.arrayBuffer()).toString('base64');
-      return { ok: true, type: 'image', provider: 'pollinations', model, mimeType, filename: `transformai-infographic.${mimeType.includes('png') ? 'png' : 'jpg'}`, data };
+      const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: cleanPrompt,
+          width: 1280,
+          height: 720,
+          num_steps: 4,
+        }),
+        signal: AbortSignal.timeout(120000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Cloudflare returned HTTP ${response.status}: ${(await response.text()).slice(0, 700)}`);
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+
+      // Some Workers AI image models can return the image directly.
+      if (contentType.startsWith('image/')) {
+        const mimeType = contentType.split(';')[0] || 'image/png';
+        const data = Buffer.from(await response.arrayBuffer()).toString('base64');
+        return {
+          ok: true,
+          type: 'image',
+          provider: 'cloudflare',
+          model,
+          mimeType,
+          filename: `transformai-infographic.${mimeType.includes('jpeg') ? 'jpg' : 'png'}`,
+          data,
+        };
+      }
+
+      const payload: any = await response.json();
+      const result = payload?.result ?? payload;
+      const image = result?.image ?? result?.data ?? result;
+
+      if (typeof image !== 'string') {
+        throw new Error('Cloudflare image response did not contain base64 image data.');
+      }
+
+      const data = image.replace(/^data:image\/[^;]+;base64,/, '');
+      const mimeType = result?.mimeType || result?.mime_type || 'image/png';
+
+      return {
+        ok: true,
+        type: 'image',
+        provider: 'cloudflare',
+        model,
+        mimeType,
+        filename: `transformai-infographic.${mimeType.includes('jpeg') ? 'jpg' : 'png'}`,
+        data,
+      };
     } catch (error) {
-      return { ok: false, status: 'image_generation_failed', provider: 'pollinations', message: error instanceof Error ? error.message : String(error) };
+      return {
+        ok: false,
+        status: 'image_generation_failed',
+        provider: 'cloudflare',
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
