@@ -5,6 +5,7 @@ import PDFDocument from "pdfkit";
 import PptxGenJS from "pptxgenjs";
 import { Document, Packer, Paragraph, HeadingLevel } from "docx";
 import { AgentOrchestratorService } from "./agents/agent-orchestrator.service";
+import { MediaService } from "./media.service";
 import type { SourceConflict } from "./agents/agent.types";
 
 export type ExportSource = { id?: string; name: string; type?: string; url?: string; excerpt?: string };
@@ -12,7 +13,7 @@ export type ExportVerification = { score?: number; passed?: boolean; status?: st
 
 @Injectable()
 export class TransformService {
-  constructor(private readonly agentOrchestrator: AgentOrchestratorService) {}
+  constructor(private readonly agentOrchestrator: AgentOrchestratorService, private readonly mediaService: MediaService) {}
 
   async transform(body: { source?: string; sources?: unknown[]; outputs?: string[]; audience?: string; tone?: string; language?: string; detail?: string; research?: boolean; model?: string; verify?: boolean; researchEvidence?: string; researchSources?: Array<{title:string;url:string;snippet:string;score?:number}> }) {
     const source = body.source?.trim() || "";
@@ -38,6 +39,21 @@ export class TransformService {
       const unresolvedConflicts = conflicts.filter(c => c.resolution === "unresolved" || c.resolution === "needs_review");
       const agentResult = await this.agentOrchestrator.run({ source: workingSource, title:base.title, summary:base.summary, facts:base.facts, entities:base.entities, claims:base.claims, provenance:base.provenance, conflicts, audience:body.audience, tone:body.tone, language:body.language, detail:body.detail }, outputs, model);
       const content:any = { ...base, outputs: { ...base.outputs, ...agentResult.outputs }, research_sources:researchSources, agents:agentResult.agents, conflicts, conflict_count:conflicts.length, unresolved_conflicts:unresolvedConflicts.length, quality:{score:100,passed:true,issues:[]} };
+
+      if (outputs.includes("Infographic")) {
+        const image:any = await this.mediaService.generateImage(`Create a polished factual infographic from this source. Use concise labels, clear visual hierarchy, and do not invent facts. SOURCE: ${source.slice(0,12000)}`);
+        content.outputs["Infographic"] = image.ok
+          ? { title:"Generated Infographic", image_data:image.data, mimeType:image.mimeType, filename:image.filename, provider:image.provider, model:image.model }
+          : { title:"Infographic generation unavailable", image_prompt:`Create a polished factual infographic from: ${source.slice(0,3000)}`, generation_error:image.message };
+      }
+      if (outputs.includes("Video Package")) {
+        const plan:any = await this.mediaService.createVideoPackage(`Create a factual short-form video package from this source: ${source.slice(0,12000)}`);
+        const video:any = await this.mediaService.generateVideo(`Create a concise factual documentary-style video based only on this source. Avoid invented claims. SOURCE: ${source.slice(0,8000)}`);
+        content.outputs["Video Package"] = plan.ok
+          ? { ...plan.package, video_data:video.ok?video.data:undefined, video_mimeType:video.ok?video.mimeType:undefined, video_filename:video.ok?video.filename:undefined, video_provider:video.ok?video.provider:undefined, video_error:video.ok?undefined:video.message }
+          : { title:"Video generation unavailable", script:"", storyboard:[], generation_error:plan.message, video_error:video.ok?undefined:video.message };
+      }
+
       const issues:string[]=[];
       const missing=outputs.filter(name=>!content.outputs[name] || (typeof content.outputs[name]==="string"&&!content.outputs[name].trim()));
       if(missing.length) issues.push(`Missing requested outputs: ${missing.join(", ")}`);
@@ -78,8 +94,7 @@ export class TransformService {
   async createPptx(title:string,slides:{title:string;bullets?:string[];speakerNotes?:string}[], sources:ExportSource[] = [], verification:ExportVerification = {}){
     const pptx=new PptxGenJS(); pptx.layout="LAYOUT_WIDE"; pptx.author="TransformAI";
     for(const item of slides){const slide=pptx.addSlide();slide.addText(item.title,{x:.7,y:.55,w:12,h:.6,fontSize:28,bold:true});slide.addText((item.bullets||[]).map(b=>({text:b,options:{bullet:{indent:18}}})),{x:.9,y:1.45,w:11.3,h:4.7,fontSize:18,breakLine:true,valign:"top"});if(item.speakerNotes)slide.addNotes(item.speakerNotes);}
-    this.addPptxVerificationSlide(pptx,sources,verification);
-    return pptx.write({outputType:"nodebuffer"});
+    this.addPptxVerificationSlide(pptx,sources,verification); return pptx.write({outputType:"nodebuffer"});
   }
 
   private addPptxVerificationSlide(pptx:PptxGenJS,sources:ExportSource[],verification:ExportVerification){
