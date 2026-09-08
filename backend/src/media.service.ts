@@ -27,7 +27,6 @@ export class MediaService {
       const response = await fetch(url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
-        // Keep this request model-compatible. Some Workers AI model schemas reject optional fields.
         body: JSON.stringify({ prompt: visualPrompt.slice(0, 2048) }),
         signal: AbortSignal.timeout(120000),
       });
@@ -151,41 +150,69 @@ export class MediaService {
   }
 
   async generateVideo(prompt: string) {
-    const apiKey = process.env.POLLINATIONS_API_KEY?.trim();
-    const model = process.env.POLLINATIONS_VIDEO_MODEL || 'veo';
-    const duration = Math.min(10, Math.max(4, Number(process.env.POLLINATIONS_VIDEO_DURATION || 6)));
+    const apiKey = process.env.LTX_API_KEY?.trim();
+    const model = process.env.LTX_VIDEO_MODEL || 'ltx-2-5-fast';
+    const duration = Math.min(20, Math.max(5, Number(process.env.LTX_VIDEO_DURATION || 8)));
+    const resolution = process.env.LTX_VIDEO_RESOLUTION || '1280x720';
+    const fps = Math.min(48, Math.max(24, Number(process.env.LTX_VIDEO_FPS || 24)));
+    const generateAudio = process.env.LTX_VIDEO_AUDIO !== 'false';
+    const cameraMotion = process.env.LTX_VIDEO_CAMERA_MOTION?.trim();
     const cleanPrompt = prompt.trim().slice(0, 5000) || 'Create a concise factual documentary-style video.';
 
-    // Preferred path: real AI video from Pollinations.
-    if (apiKey) {
-      try {
-        const url = `https://gen.pollinations.ai/video/${encodeURIComponent(cleanPrompt)}?${new URLSearchParams({ model, duration: String(duration) })}`;
-        const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(180000) });
-        if (!response.ok) throw new Error(`Pollinations video returned HTTP ${response.status}: ${(await response.text()).slice(0, 700)}`);
-        const mimeType = response.headers.get('content-type') || 'video/mp4';
-        const data = Buffer.from(await response.arrayBuffer()).toString('base64');
-        if (!data) throw new Error('Video provider returned an empty response.');
-        return { ok: true, type: 'video', provider: 'pollinations', model, mimeType, filename: 'transformai-video.mp4', data, duration_seconds: duration };
-      } catch (error) {
-        console.warn('AI video generation failed; attempting local MP4 fallback:', error);
-      }
+    if (!apiKey) {
+      return { ok: false, status: 'needs_api_key', provider: 'ltx', message: 'LTX_API_KEY is required for video generation. Add it to backend/.env.' };
     }
 
-    // Reliable prototype fallback: generate a visual with the working Cloudflare
-    // image pipeline and turn it into a real animated MP4 with FFmpeg. This means
-    // the UI never falls back to showing only a prompt.
     try {
-      const image: any = await this.generateImage(cleanPrompt);
-      if (!image.ok || !image.background_data) throw new Error(image.message || 'Cloudflare image fallback was unavailable.');
-      const packageData = { duration_seconds: duration, subtitles: [] };
-      const rendered = await this.renderVideoPackage(packageData, {
-        data: image.background_data,
-        mimeType: image.background_mimeType || 'image/jpeg',
+      const body: Record<string, unknown> = {
+        prompt: cleanPrompt,
+        model,
+        duration,
+        resolution,
+        fps,
+        generate_audio: generateAudio,
+      };
+      if (cameraMotion) body.camera_motion = cameraMotion;
+
+      const response = await fetch('https://api.ltx.io/v1/text-to-video', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(300000),
       });
-      if (!rendered.ok) throw new Error(rendered.message);
-      return { ...rendered, provider: 'cloudflare+ffmpeg', model: process.env.CLOUDFLARE_IMAGE_MODEL || '@cf/black-forest-labs/flux-1-schnell', fallback: true };
+
+      if (!response.ok) {
+        const details = (await response.text()).slice(0, 1200);
+        throw new Error(`LTX video returned HTTP ${response.status}: ${details}`);
+      }
+
+      const mimeType = response.headers.get('content-type') || 'video/mp4';
+      const data = Buffer.from(await response.arrayBuffer());
+      if (!data.length) throw new Error('LTX returned an empty video response.');
+
+      return {
+        ok: true,
+        type: 'video',
+        provider: 'ltx',
+        model,
+        mimeType,
+        filename: 'transformai-video.mp4',
+        data: data.toString('base64'),
+        duration_seconds: duration,
+        resolution,
+        fps,
+        audio: generateAudio,
+      };
     } catch (error) {
-      return { ok: false, status: 'video_generation_failed', provider: apiKey ? 'pollinations' : 'cloudflare+ffmpeg', message: error instanceof Error ? error.message : String(error) };
+      return {
+        ok: false,
+        status: 'video_generation_failed',
+        provider: 'ltx',
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
