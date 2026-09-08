@@ -26,17 +26,19 @@ export class MediaService {
     }
 
     try {
+      // Important: FLUX creates the visual layer only. Exact human-readable text
+      // is rendered separately as SVG so spelling, small text and multilingual
+      // scripts remain crisp instead of being hallucinated by the image model.
+      const plan = await this.createInfographicPlan(cleanPrompt);
+      const visualPrompt = plan.visual_prompt || cleanPrompt;
       const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
-      // FLUX.1 Schnell on the Workers AI endpoint currently accepts the prompt
-      // as its portable input schema. Do not send width/height/num_steps here:
-      // those properties are rejected by the model schema with HTTP 400.
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ prompt: cleanPrompt }),
+        body: JSON.stringify({ prompt: visualPrompt.slice(0, 2048), seed: Math.floor(Math.random() * 2147483647) }),
         signal: AbortSignal.timeout(120000),
       });
 
@@ -45,41 +47,35 @@ export class MediaService {
       }
 
       const contentType = response.headers.get('content-type') || '';
+      let backgroundData = '';
+      let backgroundMime = 'image/jpeg';
 
-      // Some Workers AI image models can return the image directly.
       if (contentType.startsWith('image/')) {
-        const mimeType = contentType.split(';')[0] || 'image/png';
-        const data = Buffer.from(await response.arrayBuffer()).toString('base64');
-        return {
-          ok: true,
-          type: 'image',
-          provider: 'cloudflare',
-          model,
-          mimeType,
-          filename: `transformai-infographic.${mimeType.includes('jpeg') ? 'jpg' : 'png'}`,
-          data,
-        };
+        backgroundMime = contentType.split(';')[0] || 'image/jpeg';
+        backgroundData = Buffer.from(await response.arrayBuffer()).toString('base64');
+      } else {
+        const payload: any = await response.json();
+        const result = payload?.result ?? payload;
+        const image = result?.image ?? result?.data;
+        if (typeof image !== 'string') throw new Error('Cloudflare image response did not contain base64 image data.');
+        backgroundData = image.replace(/^data:image\/[^;]+;base64,/, '');
+        backgroundMime = result?.mimeType || result?.mime_type || 'image/jpeg';
       }
 
-      const payload: any = await response.json();
-      const result = payload?.result ?? payload;
-      const image = result?.image ?? result?.data ?? result;
-
-      if (typeof image !== 'string') {
-        throw new Error('Cloudflare image response did not contain base64 image data.');
-      }
-
-      const data = image.replace(/^data:image\/[^;]+;base64,/, '');
-      const mimeType = result?.mimeType || result?.mime_type || 'image/png';
-
+      const svg = this.buildInfographicSvg(backgroundData, backgroundMime, plan);
+      const data = Buffer.from(svg, 'utf8').toString('base64');
       return {
         ok: true,
         type: 'image',
         provider: 'cloudflare',
         model,
-        mimeType,
-        filename: `transformai-infographic.${mimeType.includes('jpeg') ? 'jpg' : 'png'}`,
+        mimeType: 'image/svg+xml',
+        filename: 'transformai-infographic.svg',
         data,
+        background_data: backgroundData,
+        background_mimeType: backgroundMime,
+        text_rendered_separately: true,
+        language: plan.language,
       };
     } catch (error) {
       return {
@@ -89,6 +85,79 @@ export class MediaService {
         message: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  private async createInfographicPlan(sourcePrompt: string) {
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    if (!apiKey) {
+      return {
+        language: 'English',
+        title: 'TransformAI Infographic',
+        subtitle: '',
+        facts: [] as string[],
+        visual_prompt: `Create a clean professional infographic background and illustrations. No text, no letters, no numbers, no labels, no typography. ${sourcePrompt}`,
+      };
+    }
+
+    try {
+      const google = createGoogleGenerativeAI({ apiKey });
+      const { text } = await generateText({
+        model: google(process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'),
+        temperature: 0.1,
+        prompt: `You are an infographic art director. Extract a compact, factual text layout from the supplied source and separately describe the visual background. Preserve the requested/source language. Never invent facts. Return ONLY JSON with this shape: {"language":"...","title":"...","subtitle":"...","facts":["...","...","..."],"visual_prompt":"..."}. The visual_prompt must describe ONLY the visual scene, icons, charts, composition and color mood. It MUST say: no text, no letters, no numbers, no labels, no typography. Keep title under 70 characters, subtitle under 120 characters, and at most 5 short facts. SOURCE/PROMPT:\n${sourcePrompt.slice(0, 14000)}`,
+      });
+      const clean = text.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+      const parsed: any = JSON.parse(clean);
+      return {
+        language: String(parsed.language || 'English'),
+        title: String(parsed.title || 'TransformAI Infographic').slice(0, 120),
+        subtitle: String(parsed.subtitle || '').slice(0, 220),
+        facts: Array.isArray(parsed.facts) ? parsed.facts.map((x: any) => String(x).trim()).filter(Boolean).slice(0, 5) : [],
+        visual_prompt: `${String(parsed.visual_prompt || 'Clean modern factual infographic background').slice(0, 1900)}. No text, no letters, no numbers, no labels, no typography.`,
+      };
+    } catch {
+      return {
+        language: 'English',
+        title: 'TransformAI Infographic',
+        subtitle: '',
+        facts: [] as string[],
+        visual_prompt: `Create a clean professional infographic background and illustrations. No text, no letters, no numbers, no labels, no typography. ${sourcePrompt}`,
+      };
+    }
+  }
+
+  private xml(value: string) {
+    return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  }
+
+  private wrapText(text: string, max = 58) {
+    const words = text.split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let line = '';
+    for (const word of words) {
+      const next = line ? `${line} ${word}` : word;
+      if (next.length > max && line) { lines.push(line); line = word; } else line = next;
+    }
+    if (line) lines.push(line);
+    return lines.slice(0, 3);
+  }
+
+  private buildInfographicSvg(backgroundData: string, backgroundMime: string, plan: any) {
+    const titleLines = this.wrapText(plan.title || 'TransformAI Infographic', 32).slice(0, 2);
+    const subtitleLines = this.wrapText(plan.subtitle || '', 62).slice(0, 2);
+    const facts = Array.isArray(plan.facts) ? plan.facts : [];
+    const titleSvg = titleLines.map((line: string, i: number) => `<text x="80" y="${105 + i * 62}" class="title">${this.xml(line)}</text>`).join('');
+    const subtitleStart = 105 + titleLines.length * 62 + 12;
+    const subtitleSvg = subtitleLines.map((line: string, i: number) => `<text x="82" y="${subtitleStart + i * 34}" class="subtitle">${this.xml(line)}</text>`).join('');
+    const factStart = subtitleStart + Math.max(1, subtitleLines.length) * 34 + 55;
+    const factSvg = facts.map((fact: string, i: number) => {
+      const lines = this.wrapText(fact, 55);
+      const y = factStart + i * 92;
+      return `<g><rect x="72" y="${y - 34}" width="1136" height="78" rx="18" class="factBox"/><circle cx="104" cy="${y - 4}" r="10" class="dot"/>${lines.map((line: string, j: number) => `<text x="132" y="${y + j * 25}" class="fact">${this.xml(line)}</text>`).join('')}</g>`;
+    }).join('');
+    const lang = this.xml(plan.language || 'English');
+    const bgMime = this.xml(backgroundMime || 'image/jpeg');
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" xml:lang="${lang}"><defs><linearGradient id="shade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-opacity=".80"/><stop offset=".48" stop-opacity=".38"/><stop offset="1" stop-opacity=".82"/></linearGradient><style><![CDATA[.title{font-family:'Nirmala UI','Noto Sans Bengali','Noto Sans Devanagari','Noto Sans','Arial',sans-serif;font-size:52px;font-weight:800;fill:#fff}.subtitle{font-family:'Nirmala UI','Noto Sans Bengali','Noto Sans Devanagari','Noto Sans','Arial',sans-serif;font-size:23px;font-weight:500;fill:#fff}.fact{font-family:'Nirmala UI','Noto Sans Bengali','Noto Sans Devanagari','Noto Sans','Arial',sans-serif;font-size:20px;font-weight:600;fill:#172033}.factBox{fill:#fff;fill-opacity:.94}.dot{fill:#2563eb}]]></style></defs><image href="data:${bgMime};base64,${backgroundData}" x="0" y="0" width="1280" height="720" preserveAspectRatio="xMidYMid slice"/><rect width="1280" height="720" fill="url(#shade)"/><rect x="48" y="48" width="1184" height="624" rx="28" fill="none" stroke="#ffffff" stroke-opacity=".24" stroke-width="2"/>${titleSvg}${subtitleSvg}${factSvg}<text x="82" y="680" class="subtitle" font-size="14">TransformAI · ${lang}</text></svg>`;
   }
 
   async createVideoPackage(prompt: string) {
