@@ -3,6 +3,8 @@ import { TransformService } from './transform.service';
 import { ResearchService } from './research.service';
 import { SourceInput, SourceService } from './source.service';
 
+const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash-lite';
+
 @Controller('api/workflow')
 export class WorkflowController {
   constructor(private readonly transformService: TransformService, private readonly researchService: ResearchService, private readonly sourceService: SourceService) {}
@@ -14,6 +16,7 @@ export class WorkflowController {
     const outputs = body.outputs?.length ? body.outputs : ['Executive Summary'];
     const nodes = body.nodes || {};
     const enabled = (id: string) => nodes[id]?.enabled !== false;
+    const model = body.model === 'gemini-2.5-flash-lite' || !body.model ? DEFAULT_GEMINI_MODEL : body.model;
 
     if (body.sources?.length) {
       events.push({ node: 'Source Input', status: 'running', detail: `${body.sources.length} source(s) submitted` });
@@ -41,12 +44,12 @@ export class WorkflowController {
     } else events.push({ node: 'Research', status: 'disabled' });
 
     if (!enabled('orchestrate')) return { ok: false, status: 'failed', message: 'Orchestrator node is disabled. Enable it to generate content.', events };
-    events.push({ node: 'Gemini Orchestrator', status: 'running', detail: body.model || 'gemini-2.5-flash-lite' });
-    const result = await this.transformService.transform({ ...body, outputs, source, research: false, researchEvidence, researchSources, verify: enabled('verify') && body.verify !== false });
+    events.push({ node: 'Gemini Orchestrator', status: 'running', detail: model });
+    const result = await this.transformService.transform({ ...body, model, outputs, source, research: false, researchEvidence, researchSources, verify: enabled('verify') && body.verify !== false });
     events[events.length - 1].status = result.ok ? 'completed' : 'failed';
     const qualityPassed = result.ok && result.content?.quality?.passed !== false;
     events.push({ node: 'Quality Guardian', status: enabled('verify') ? (qualityPassed ? 'passed' : 'review') : 'disabled', detail: enabled('verify') ? (qualityPassed ? `${result.content?.quality?.score ?? 0}/100` : 'Review generated content') : 'Verification disabled by workflow configuration' });
     events.push({ node: 'Export', status: enabled('export') && result.ok ? 'ready' : 'blocked', detail: enabled('export') && result.ok ? 'Artifacts can be downloaded from the workspace' : 'Export node disabled or generation failed' });
-    return { ...result, status: result.ok ? 'completed' : 'failed', events, workflow: { outputs, sources: body.sources?.length || 1, research: researchEnabled, model: body.model || 'gemini-2.5-flash-lite', verify: enabled('verify'), export: enabled('export') } };
+    return { ...result, status: result.ok ? 'completed' : 'failed', events, workflow: { outputs, sources: body.sources?.length || 1, research: researchEnabled, model, verify: enabled('verify'), export: enabled('export') } };
   }
 }
