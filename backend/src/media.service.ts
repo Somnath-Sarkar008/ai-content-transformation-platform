@@ -14,24 +14,15 @@ export class MediaService {
     const cleanPrompt = prompt.trim() || 'Create a polished factual infographic.';
     const model = process.env.POLLINATIONS_IMAGE_MODEL || 'flux';
     const apiKey = process.env.POLLINATIONS_API_KEY?.trim();
-
+    if (!apiKey) return { ok: false, status: 'needs_api_key', provider: 'pollinations', message: 'POLLINATIONS_API_KEY is required for image generation. Add it to backend/.env.' };
     try {
       const encoded = encodeURIComponent(cleanPrompt);
-      const params = new URLSearchParams({ model, width: '1280', height: '720', nologo: 'true', enhance: 'true' });
-      if (apiKey) params.set('key', apiKey);
-      const primary = `https://gen.pollinations.ai/image/${encoded}?${params.toString()}`;
-      let response = await fetch(primary);
-      if (!response.ok && !apiKey) {
-        const legacy = `https://image.pollinations.ai/prompt/${encoded}?model=${encodeURIComponent(model)}&width=1280&height=720&nologo=true&enhance=true`;
-        response = await fetch(legacy);
-      }
-      if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(`Pollinations returned HTTP ${response.status}${body ? `: ${body.slice(0, 500)}` : ''}`);
-      }
+      const url = `https://gen.pollinations.ai/image/${encoded}?${new URLSearchParams({ model, width: '1280', height: '720', nologo: 'true', enhance: 'true' })}`;
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(90000) });
+      if (!response.ok) throw new Error(`Pollinations returned HTTP ${response.status}: ${(await response.text()).slice(0, 400)}`);
       const mimeType = response.headers.get('content-type') || 'image/jpeg';
       const data = Buffer.from(await response.arrayBuffer()).toString('base64');
-      return { ok: true, type: 'image', provider: 'pollinations', model, mimeType, data };
+      return { ok: true, type: 'image', provider: 'pollinations', model, mimeType, filename: `transformai-infographic.${mimeType.includes('png') ? 'png' : 'jpg'}`, data };
     } catch (error) {
       return { ok: false, status: 'image_generation_failed', provider: 'pollinations', message: error instanceof Error ? error.message : String(error) };
     }
@@ -42,11 +33,7 @@ export class MediaService {
     if (!apiKey) return { ok: false, status: 'needs_api_key', message: 'GEMINI_API_KEY is not configured for video planning.' };
     try {
       const google = createGoogleGenerativeAI({ apiKey });
-      const { text } = await generateText({
-        model: google(process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'),
-        temperature: 0.2,
-        prompt: `You are a video production planner. Create a factual short-form video package from the supplied source. Return ONLY JSON with this shape: {"title":"","duration_seconds":8,"script":"","narration":"","storyboard":[{"start":0,"end":8,"scene":"","visual":"","narration":""}],"visual_recommendations":[],"subtitles":[{"start":0,"end":4,"text":""}]}. Keep timing sequential, subtitles concise, and every factual claim grounded in the source. ${prompt}`,
-      });
+      const { text } = await generateText({ model: google(process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'), temperature: 0.2, prompt: `You are a video production planner. Create a factual short-form video package from the supplied source. Return ONLY JSON with this shape: {"title":"","duration_seconds":8,"script":"","narration":"","storyboard":[{"start":0,"end":8,"scene":"","visual":"","narration":""}],"visual_recommendations":[],"subtitles":[{"start":0,"end":4,"text":""}]}. Keep timing sequential, subtitles concise, and every factual claim grounded in the source. ${prompt}` });
       const clean = text.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
       const parsed: any = JSON.parse(clean);
       const subtitles = Array.isArray(parsed.subtitles) ? parsed.subtitles : [];
@@ -60,23 +47,19 @@ export class MediaService {
   }
 
   async generateVideo(prompt: string) {
-    const apiKey = process.env.LTX_API_KEY?.trim();
-    if (!apiKey) return { ok: false, status: 'needs_api_key', provider: 'ltx', message: 'LTX_API_KEY is not configured. Add your LTX API key to backend/.env.' };
+    const apiKey = process.env.POLLINATIONS_API_KEY?.trim();
+    if (!apiKey) return { ok: false, status: 'needs_api_key', provider: 'pollinations', message: 'POLLINATIONS_API_KEY is required for video generation. Add it to backend/.env.' };
     try {
-      const response = await fetch('https://api.ltx.io/v1/text-to-video', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt.trim().slice(0, 5000), model: process.env.LTX_VIDEO_MODEL || 'ltx-2-5-fast', duration: Number(process.env.LTX_VIDEO_DURATION || 8), resolution: process.env.LTX_VIDEO_RESOLUTION || '1280x720', fps: 24, generate_audio: true }),
-      });
-      if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(`LTX returned HTTP ${response.status}${body ? `: ${body.slice(0, 700)}` : ''}`);
-      }
+      const model = process.env.POLLINATIONS_VIDEO_MODEL || 'veo';
+      const duration = Math.min(10, Math.max(4, Number(process.env.POLLINATIONS_VIDEO_DURATION || 6)));
+      const url = `https://gen.pollinations.ai/video/${encodeURIComponent(prompt.trim().slice(0, 5000))}?${new URLSearchParams({ model, duration: String(duration) })}`;
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(180000) });
+      if (!response.ok) throw new Error(`Pollinations video returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
       const mimeType = response.headers.get('content-type') || 'video/mp4';
       const data = Buffer.from(await response.arrayBuffer()).toString('base64');
-      return { ok: true, type: 'video', provider: 'ltx', model: process.env.LTX_VIDEO_MODEL || 'ltx-2-5-fast', mimeType, filename: 'transformai-video.mp4', data };
+      return { ok: true, type: 'video', provider: 'pollinations', model, mimeType, filename: 'transformai-video.mp4', data, duration_seconds: duration };
     } catch (error) {
-      return { ok: false, status: 'video_generation_failed', provider: 'ltx', message: error instanceof Error ? error.message : String(error) };
+      return { ok: false, status: 'video_generation_failed', provider: 'pollinations', message: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -98,21 +81,17 @@ export class MediaService {
         const child: ReturnType<typeof spawn> = spawn(executable, ['-y','-f','lavfi','-i',`color=c=0x101827:s=1280x720:r=30:d=${duration}`,'-vf',filters,'-t',String(duration),'-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-movflags','+faststart',outPath], { windowsHide: true });
         let stderr = '';
         child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-        child.on('error', reject);
-        child.on('close', (code: number | null) => code === 0 ? resolve() : reject(new Error(stderr.slice(-3000) || `FFmpeg exited with code ${code}`)));
+        child.on('error', reject); child.on('close', (code: number | null) => code === 0 ? resolve() : reject(new Error(stderr.slice(-3000) || `FFmpeg exited with code ${code}`)));
       });
       const data = await fs.readFile(outPath);
       return { ok: true, type: 'video', mimeType: 'video/mp4', filename: 'transformai-video.mp4', data: data.toString('base64'), duration_seconds: duration };
     } catch (error) {
       return { ok: false, status: 'video_render_failed', message: error instanceof Error ? error.message : String(error) };
-    } finally {
-      await fs.rm(work, { recursive: true, force: true }).catch(() => undefined);
-    }
+    } finally { await fs.rm(work, { recursive: true, force: true }).catch(() => undefined); }
   }
 
   private srtTime(seconds: number) {
-    const ms = Math.max(0, Math.round(seconds * 1000));
-    const h = Math.floor(ms / 3600000); const m = Math.floor((ms % 3600000) / 60000); const s = Math.floor((ms % 60000) / 1000); const x = ms % 1000;
+    const ms = Math.max(0, Math.round(seconds * 1000)); const h = Math.floor(ms / 3600000); const m = Math.floor((ms % 3600000) / 60000); const s = Math.floor((ms % 60000) / 1000); const x = ms % 1000;
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(x).padStart(3, '0')}`;
   }
 }
