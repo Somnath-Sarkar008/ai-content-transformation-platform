@@ -3,7 +3,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { generateText } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import pdfParse from 'pdf-parse';
+import { PDFParse } from 'pdf-parse';
 import mammoth from 'mammoth';
 
 @Controller('api/sources')
@@ -16,7 +16,15 @@ export class UploadController {
     const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
     try {
       if (['txt','md','csv','json','xml','html','js','ts'].includes(ext) || file.mimetype.startsWith('text/')) return { ok:true,name,mimetype:file.mimetype,size:file.size,type:'text',content:file.buffer.toString('utf8').slice(0,50000),message:'Text file extracted successfully.' };
-      if (ext==='pdf' || file.mimetype==='application/pdf') { const parsed=await pdfParse(file.buffer); return {ok:true,name,mimetype:file.mimetype,size:file.size,type:'pdf',content:parsed.text.slice(0,50000),pages:parsed.numpages,message:'PDF text extracted successfully.'}; }
+      if (ext==='pdf' || file.mimetype==='application/pdf') {
+        const parser = new PDFParse({ data: file.buffer });
+        try {
+          const parsed = await parser.getText();
+          return {ok:true,name,mimetype:file.mimetype,size:file.size,type:'pdf',content:parsed.text.slice(0,50000),pages:parsed.total||0,message:'PDF text extracted successfully.'};
+        } finally {
+          await parser.destroy().catch(()=>undefined);
+        }
+      }
       if (ext==='docx' || file.mimetype==='application/vnd.openxmlformats-officedocument.wordprocessingml.document') { const parsed=await mammoth.extractRawText({buffer:file.buffer}); return {ok:true,name,mimetype:file.mimetype,size:file.size,type:'docx',content:parsed.value.slice(0,50000),message:'DOCX text extracted successfully.'}; }
       if (file.mimetype.startsWith('image/')) {
         let description=`Uploaded image: ${name}.`;
