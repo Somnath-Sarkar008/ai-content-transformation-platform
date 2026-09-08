@@ -5,7 +5,7 @@ import type { AgentContext, AgentResult } from './agent.types';
 
 @Injectable()
 export class PresentationAgent {
-  async run(ctx: AgentContext, requested: string[], model = 'gemini-2.5-flash-lite'): Promise<AgentResult> {
+  async run(ctx: AgentContext, requested: string[], model = 'gemini-3.5-flash-lite'): Promise<AgentResult> {
     if (!requested.includes('Presentation')) return { agent:'presentation', outputs:{} };
     const google = createGoogleGenerativeAI({ apiKey: process.env.GEMINI_API_KEY!.trim() });
     const conflicts = ctx.conflicts || [];
