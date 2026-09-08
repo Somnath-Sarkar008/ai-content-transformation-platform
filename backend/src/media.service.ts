@@ -94,7 +94,7 @@ export class MediaService {
   }
 
   private xml(value: string) {
-    return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+    return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&apos;');
   }
 
   private wrapText(text: string, max = 58) {
@@ -150,67 +150,87 @@ export class MediaService {
   }
 
   async generateVideo(prompt: string) {
-    const apiKey = process.env.LTX_API_KEY?.trim();
-    const model = process.env.LTX_VIDEO_MODEL || 'ltx-2-5-fast';
-    const duration = Math.min(20, Math.max(5, Number(process.env.LTX_VIDEO_DURATION || 8)));
-    const resolution = process.env.LTX_VIDEO_RESOLUTION || '1280x720';
-    const fps = Math.min(48, Math.max(24, Number(process.env.LTX_VIDEO_FPS || 24)));
-    const generateAudio = process.env.LTX_VIDEO_AUDIO !== 'false';
-    const cameraMotion = process.env.LTX_VIDEO_CAMERA_MOTION?.trim();
-    const cleanPrompt = prompt.trim().slice(0, 5000) || 'Create a concise factual documentary-style video.';
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
+    const model = process.env.CLOUDFLARE_VIDEO_MODEL || 'black-forest-labs/flux-3-video';
+    const duration = Math.min(20, Math.max(5, Number(process.env.CLOUDFLARE_VIDEO_DURATION || 5)));
+    const resolution = (process.env.CLOUDFLARE_VIDEO_RESOLUTION || 'hd').toLowerCase();
+    const aspectRatio = process.env.CLOUDFLARE_VIDEO_ASPECT_RATIO || '16:9';
+    const generateAudio = process.env.CLOUDFLARE_VIDEO_AUDIO !== 'false';
+    const draft = process.env.CLOUDFLARE_VIDEO_DRAFT === 'true';
+    const cleanPrompt = prompt.trim().slice(0, 8000) || 'Create a concise factual documentary-style video.';
 
-    if (!apiKey) {
-      return { ok: false, status: 'needs_api_key', provider: 'ltx', message: 'LTX_API_KEY is required for video generation. Add it to backend/.env.' };
+    if (!accountId || !apiToken) {
+      return { ok: false, status: 'needs_api_key', provider: 'cloudflare', message: 'CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required for video generation. Add them to backend/.env.' };
     }
 
     try {
-      const body: Record<string, unknown> = {
+      const input: Record<string, unknown> = {
+        mode: 't2v',
         prompt: cleanPrompt,
-        model,
+        resolution: resolution === 'fhd' ? 'fhd' : 'hd',
         duration,
-        resolution,
-        fps,
+        aspect_ratio: aspectRatio,
         generate_audio: generateAudio,
       };
-      if (cameraMotion) body.camera_motion = cameraMotion;
+      if (draft) input.draft = true;
 
-      const response = await fetch('https://api.ltx.io/v1/text-to-video', {
+      const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${apiToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ model, input }),
         signal: AbortSignal.timeout(300000),
       });
 
+      const raw = await response.text();
+      let payload: any;
+      try { payload = JSON.parse(raw); } catch { payload = { raw }; }
+
       if (!response.ok) {
-        const details = (await response.text()).slice(0, 1200);
-        throw new Error(`LTX video returned HTTP ${response.status}: ${details}`);
+        const message = payload?.errors?.[0]?.message || payload?.error?.message || raw.slice(0, 1600);
+        return {
+          ok: false,
+          status: response.status === 402 ? 'payment_required' : 'video_generation_failed',
+          provider: 'cloudflare',
+          model,
+          message: `Cloudflare video returned HTTP ${response.status}: ${message}`,
+        };
       }
 
-      const mimeType = response.headers.get('content-type') || 'video/mp4';
-      const data = Buffer.from(await response.arrayBuffer());
-      if (!data.length) throw new Error('LTX returned an empty video response.');
+      const result = payload?.result ?? payload;
+      const videoUrl = result?.video;
+      if (typeof videoUrl !== 'string' || !videoUrl) {
+        throw new Error('Cloudflare video response did not contain a generated MP4 URL.');
+      }
+
+      const videoResponse = await fetch(videoUrl, { signal: AbortSignal.timeout(180000) });
+      if (!videoResponse.ok) throw new Error(`Cloudflare video download returned HTTP ${videoResponse.status}.`);
+      const data = Buffer.from(await videoResponse.arrayBuffer());
+      if (!data.length) throw new Error('Cloudflare returned an empty video.');
 
       return {
         ok: true,
         type: 'video',
-        provider: 'ltx',
+        provider: 'cloudflare',
         model,
-        mimeType,
+        mimeType: videoResponse.headers.get('content-type') || 'video/mp4',
         filename: 'transformai-video.mp4',
         data: data.toString('base64'),
         duration_seconds: duration,
         resolution,
-        fps,
+        aspect_ratio: aspectRatio,
         audio: generateAudio,
+        draft,
       };
     } catch (error) {
       return {
         ok: false,
         status: 'video_generation_failed',
-        provider: 'ltx',
+        provider: 'cloudflare',
+        model,
         message: error instanceof Error ? error.message : String(error),
       };
     }
