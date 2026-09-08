@@ -27,18 +27,16 @@ export class MediaService {
 
     try {
       const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
+      // FLUX.1 Schnell on the Workers AI endpoint currently accepts the prompt
+      // as its portable input schema. Do not send width/height/num_steps here:
+      // those properties are rejected by the model schema with HTTP 400.
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          prompt: cleanPrompt,
-          width: 1280,
-          height: 720,
-          num_steps: 4,
-        }),
+        body: JSON.stringify({ prompt: cleanPrompt }),
         signal: AbortSignal.timeout(120000),
       });
 
