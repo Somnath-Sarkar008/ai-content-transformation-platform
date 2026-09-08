@@ -5,7 +5,7 @@ import type { AgentContext, AgentResult } from './agent.types';
 
 @Injectable()
 export class TextAgent {
-  async run(ctx: AgentContext, requested: string[], model = 'gemini-2.5-flash-lite'): Promise<AgentResult> {
+  async run(ctx: AgentContext, requested: string[], model = 'gemini-3.5-flash-lite'): Promise<AgentResult> {
     const names = requested.filter(x => ['LinkedIn Post','X / Thread','Advisory','Executive Summary'].includes(x));
     if (!names.length) return { agent: 'text', outputs: {} };
     const google = createGoogleGenerativeAI({ apiKey: process.env.GEMINI_API_KEY!.trim() });
