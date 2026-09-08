@@ -21,7 +21,7 @@ export class TransformService {
     const apiKey = process.env.GEMINI_API_KEY?.trim();
     if (!apiKey) return { ok: false, status: "needs_api_key", message: "GEMINI_API_KEY is not available to the NestJS process." };
     const google = createGoogleGenerativeAI({ apiKey });
-    const model = body.model || "gemini-2.5-flash-lite";
+    const model = body.model === "gemini-2.5-flash-lite" || !body.model ? "gemini-3.5-flash-lite" : body.model;
     let researchSources = body.researchSources || [];
     let researchAnswer = body.researchEvidence || "";
     if (body.research && !researchSources.length && process.env.TAVILY_API_KEY?.trim()) {
@@ -57,7 +57,7 @@ export class TransformService {
   async refine(body:{source?:string;outputs?:string[];content?:unknown;issues?:string[];audience?:string;tone?:string;language?:string;detail?:string;model?:string}) {
     const source=body.source?.trim()||""; const outputs=body.outputs?.length?body.outputs:["Executive Summary"]; const apiKey=process.env.GEMINI_API_KEY?.trim();
     if(!source)return {ok:false,message:"Source content is required"}; if(!apiKey)return {ok:false,status:"needs_api_key",message:"GEMINI_API_KEY is not available to the NestJS process."};
-    const google=createGoogleGenerativeAI({apiKey}); const model=body.model||"gemini-2.5-flash-lite";
+    const google=createGoogleGenerativeAI({apiKey}); const model=body.model === "gemini-2.5-flash-lite" || !body.model ? "gemini-3.5-flash-lite" : body.model;
     try{
       const prompt=`You are the Refinement Agent. Improve the generated artifacts while preserving every supported fact from the ORIGINAL SOURCE. Fix only the listed quality issues. If the previous content contains a source conflict, never silently choose a side; qualify, omit, or preserve the disagreement unless the source itself provides a defensible resolution. Return ONLY JSON {"title":"...","summary":"...","facts":[{"id":"f1","text":"...","source_ids":["source-1"]}],"entities":[{"name":"...","description":"..."}],"claims":[{"id":"c1","text":"...","source_ids":["source-1"]}],"outputs":{}}. Every factual claim must include source_ids when possible. Never invent facts.\nORIGINAL SOURCE:\n${source.slice(0,50000)}\nREQUESTED:${outputs.join(", ")}\nQUALITY ISSUES TO FIX:\n${(body.issues||[]).join("\n")||"Improve clarity, consistency and format compliance."}\nPREVIOUS GENERATED CONTENT:\n${JSON.stringify(body.content||{}).slice(0,60000)}`;
       const {text}=await generateText({model:google(model),prompt,temperature:.1}); const clean=text.replace(/^```json\s*/i,"").replace(/```$/i,"").trim(); const refined:any=JSON.parse(clean);
@@ -94,7 +94,7 @@ export class TransformService {
     this.writePdfVerification(doc,sources,verification); doc.end(); return done;
   }
 
-  private writePdfVerification(doc:PDFDocument,sources:ExportSource[],verification:ExportVerification){
+  private writePdfVerification(doc:any,sources:ExportSource[],verification:ExportVerification){
     doc.addPage().fontSize(18).text("Sources & Verification",{underline:true}).moveDown();
     doc.fontSize(11).text(`Quality Guardian: ${verification.passed===true?"VERIFIED":verification.passed===false?"REVIEW REQUIRED":"NOT RUN"}`);
     doc.text(`Verification score: ${verification.score ?? "—"}/100`); doc.text(`Source conflicts: ${verification.conflictCount ?? 0} · Unresolved: ${verification.unresolvedConflicts ?? 0}`).moveDown();
